@@ -57,14 +57,14 @@ def classify_and_publish(log_text: str, producer: AuroraProducer, source: str = 
     # Always write to pipeline.json for analyst.py and responder.py
     with open("pipeline.json", "w") as f:
         json.dump(payload, f, indent=2)
-    print("   ✅ Written to pipeline.json")
+    print("    Written to pipeline.json")
 
     # Publish to Kafka logs.categories using AuroraProducer
     try:
         producer.ensure_topic("logs.categories")
         producer.send_log("logs.categories", payload, key=log_text[:50])
         producer.flush()
-        print("   ✅ Published to Kafka → logs.categories\n")
+        print("    Published to Kafka → logs.categories\n")
     except Exception as e:
         print(f"   ⚠️  Kafka publish failed (pipeline.json still written): {e}\n")
 
@@ -88,7 +88,7 @@ def start_kafka_consumer():
 
     consumer.consumer.poll(timeout_ms=1000)
 
-    print("✅ Connected — listening on logs.unfiltered...\n")
+    print(" Connected — listening on logs.unfiltered...\n")
 
     try:
         for message in consumer:
@@ -110,7 +110,7 @@ def start_kafka_consumer():
                 classify_and_publish(log_text, producer, source="kafka:logs.unfiltered")
 
             except Exception as e:
-                print(f"❌ Error processing message: {e}")
+                print(f" Error processing message: {e}")
                 continue
 
     except KeyboardInterrupt:
@@ -147,7 +147,7 @@ def manual_mode():
             print("\nExiting.")
             break
         except Exception as e:
-            print(f"\n❌ Error: {e}")
+            print(f"\nError: {e}")
 
     producer.close()
 
@@ -160,7 +160,7 @@ def main():
     if mode == "kafka":
         start_kafka_consumer()
     else:
-        print("\n💡 Tip: set CLASSIFIER_MODE=kafka in .env to consume from Kafka automatically.")
+        print("\n Tip: set CLASSIFIER_MODE=kafka in .env to consume from Kafka automatically.")
         manual_mode()
 
 

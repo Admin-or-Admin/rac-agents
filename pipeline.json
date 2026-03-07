@@ -1,18 +1,66 @@
 {
-  "log": "Dream less capital foot hit fact great.",
+  "log": "Reach expert maybe down authority.",
   "classification": {
-    "category": "application",
-    "severity": "info",
+    "category": "infrastructure",
+    "severity": "medium",
     "tags": [
-      "random",
-      "nonsensical",
-      "unknown",
-      "data"
+      "authority",
+      "reachability",
+      "permission",
+      "failure"
     ],
-    "isCybersecurity": false,
-    "sendToInvestigationAgent": false,
-    "classificationConfidence": 95,
-    "reasoning": "The log entry consists of random, unrelated words and does not indicate any specific system event or security concern, classifying it as informational noise."
+    "isCybersecurity": true,
+    "sendToInvestigationAgent": true,
+    "classificationConfidence": 75,
+    "reasoning": "The log suggests a loss of system authority or reachability, which could be an infrastructure issue or a symptom of a security incident requiring investigation."
   },
-  "source": "kafka:logs.unfiltered"
+  "investigation": {
+    "aiSuggestion": "The log indicates a potential loss of an authoritative system or service, impacting reachability or permissions. This could be an infrastructure failure or a symptom of a targeted attack aiming to disrupt critical services like authentication or name resolution, requiring immediate investigation to identify the affected component.",
+    "attackVector": "Service disruption or denial of service targeting critical infrastructure components (e.g., DNS, authentication services, certificate authorities). Could also be a misconfiguration or internal system failure.",
+    "recurrenceRate": 50,
+    "confidence": 60,
+    "complexity": "complex",
+    "autoFixable": false,
+    "requiresHumanApproval": true,
+    "priority": 3,
+    "notifyTeams": [
+      "SOC",
+      "Infrastructure"
+    ],
+    "proposedSteps": [
+      {
+        "id": 1,
+        "title": "Identify Affected Authority",
+        "description": "Determine which specific authoritative system (e.g., DNS, Active Directory, Certificate Authority, specific application service) is referenced by the log message. This requires correlating with other logs, system context, and potentially consulting system owners.",
+        "command": null,
+        "risk": "low",
+        "estimatedTime": "~10m",
+        "rollback": null,
+        "requiresApproval": true,
+        "autoExecute": false
+      },
+      {
+        "id": 2,
+        "title": "Check Authority Service Status",
+        "description": "Once the authoritative system is identified, verify its operational status, service health, and network reachability. Look for error messages, service stoppages, or connectivity issues from relevant clients.",
+        "command": "systemctl status <service_name> || ping <authority_ip> || nslookup <domain>",
+        "risk": "low",
+        "estimatedTime": "~5m",
+        "rollback": null,
+        "requiresApproval": true,
+        "autoExecute": false
+      },
+      {
+        "id": 3,
+        "title": "Review Recent Configuration Changes/Events",
+        "description": "Investigate recent deployments, configuration changes, or security events on the affected system or network segment that could explain the loss of authority or reachability. Check change management logs and system event logs.",
+        "command": null,
+        "risk": "low",
+        "estimatedTime": "~15m",
+        "rollback": null,
+        "requiresApproval": true,
+        "autoExecute": false
+      }
+    ]
+  }
 }
