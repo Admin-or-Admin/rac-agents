@@ -2,7 +2,7 @@ import os
 import fitz  # pymupdf
 import docx
 
-KNOWLEDGE_DIR = os.getenv("KNOWLEDGE_DIR", "knowledge")
+KNOWLEDGE_DIR = os.getenv("KNOWLEDGE_DIR", "classifierKnowledge")
 
 
 def load_pdf(path: str) -> str:
