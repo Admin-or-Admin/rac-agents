@@ -8,6 +8,10 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.schema.output_parser import StrOutputParser
 from kafka_client import AuroraProducer, AuroraConsumer
 
+#classifier knowledge for pinpointing agent prompt
+from classifierKnowledge_loader import load_knowledge
+KNOWLEDGE_CONTEXT = load_knowledge()
+
 load_dotenv()
 
 llm = ChatGoogleGenerativeAI(
@@ -31,7 +35,9 @@ Return exactly this structure:
   "reasoning": "one sentence explaining the classification"
 }}
 
-sendToInvestigationAgent must be true if isCybersecurity is true AND severity is not info."""),
+sendToInvestigationAgent must be true if isCybersecurity is true AND severity is not info.
+
+{knowledge}"""),
     ("human", "{log}"),
 ])
 
@@ -168,7 +174,7 @@ def classify_and_publish(log_text: str, producer: AuroraProducer, source: str = 
     print(f"\n  [CLASSIFIER] Analysing log from {source}...")
     start = time.time()
 
-    raw = chain.invoke({"log": log_text})
+    raw = chain.invoke({"log": log_text, "knowledge": KNOWLEDGE_CONTEXT or "No additional knowledge loaded."})
     raw = raw.replace("```json", "").replace("```", "").strip()
     result = json.loads(raw)
 
