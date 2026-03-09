@@ -40,7 +40,7 @@ KAFKA_BOOTSTRAP_SERVERS = [os.getenv("KAFKA_BROKERS", "localhost:29092")]
 # ── Core classification logic ─────────────────────────────────────────────────
 
 def classify_and_publish(log_text: str, producer: AuroraProducer, source: str = "manual"):
-    print(f"\n🔍 [CLASSIFIER] Analysing log from {source}...")
+    print(f"\n [CLASSIFIER] Analysing log from {source}...")
     raw = chain.invoke({"log": log_text})
     raw = raw.replace("```json", "").replace("```", "").strip()
     result = json.loads(raw)
@@ -66,7 +66,7 @@ def classify_and_publish(log_text: str, producer: AuroraProducer, source: str = 
         producer.flush()
         print("    Published to Kafka → logs.categories\n")
     except Exception as e:
-        print(f"   ⚠️  Kafka publish failed (pipeline.json still written): {e}\n")
+        print(f"     Kafka publish failed (pipeline.json still written): {e}\n")
 
     return result
 
@@ -74,7 +74,7 @@ def classify_and_publish(log_text: str, producer: AuroraProducer, source: str = 
 # ── Kafka consumer mode ───────────────────────────────────────────────────────
 
 def start_kafka_consumer():
-    print(f"📡 [KAFKA MODE] Connecting to {KAFKA_BOOTSTRAP_SERVERS}...")
+    print(f" [KAFKA MODE] Connecting to {KAFKA_BOOTSTRAP_SERVERS}...")
 
     producer = AuroraProducer(bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS)
     producer.ensure_topic("logs.unfiltered")

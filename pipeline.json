@@ -1,66 +1,184 @@
 {
-  "log": "Reach expert maybe down authority.",
+  "log": "%AUTH-4-LOGIN_FAILED: Login failed for user 'ooliver' from host 1.1.1.1",
   "classification": {
-    "category": "infrastructure",
+    "category": "security",
     "severity": "medium",
     "tags": [
-      "authority",
-      "reachability",
-      "permission",
-      "failure"
+      "authentication",
+      "login",
+      "failed",
+      "access"
     ],
     "isCybersecurity": true,
     "sendToInvestigationAgent": true,
-    "classificationConfidence": 75,
-    "reasoning": "The log suggests a loss of system authority or reachability, which could be an infrastructure issue or a symptom of a security incident requiring investigation."
+    "classificationConfidence": 95,
+    "reasoning": "The log explicitly reports a failed login attempt, which is a direct security event indicating potential unauthorized access or brute-force activity."
   },
   "investigation": {
-    "aiSuggestion": "The log indicates a potential loss of an authoritative system or service, impacting reachability or permissions. This could be an infrastructure failure or a symptom of a targeted attack aiming to disrupt critical services like authentication or name resolution, requiring immediate investigation to identify the affected component.",
-    "attackVector": "Service disruption or denial of service targeting critical infrastructure components (e.g., DNS, authentication services, certificate authorities). Could also be a misconfiguration or internal system failure.",
-    "recurrenceRate": 50,
-    "confidence": 60,
-    "complexity": "complex",
+    "aiSuggestion": "A single failed login attempt for user 'ooliver' from IP 1.1.1.1 has been detected. While this could be a simple typo, it's crucial to monitor for subsequent attempts from this source or against this user, as it often signifies an initial probe for a brute-force or dictionary attack. Immediate investigation is required to determine if this is an isolated incident or part of a larger malicious campaign.",
+    "attackVector": "Potential brute-force or dictionary attack attempt against user 'ooliver'.",
+    "recurrenceRate": 20,
+    "confidence": 75,
+    "complexity": "simple",
     "autoFixable": false,
     "requiresHumanApproval": true,
     "priority": 3,
     "notifyTeams": [
-      "SOC",
-      "Infrastructure"
+      "SOC Team",
+      "Identity & Access Management"
     ],
     "proposedSteps": [
       {
         "id": 1,
-        "title": "Identify Affected Authority",
-        "description": "Determine which specific authoritative system (e.g., DNS, Active Directory, Certificate Authority, specific application service) is referenced by the log message. This requires correlating with other logs, system context, and potentially consulting system owners.",
+        "title": "Investigate User Activity",
+        "description": "Review logs for previous failed login attempts for user 'ooliver' across all relevant systems to identify any existing patterns or a history of suspicious activity. This helps determine if this is an isolated event or part of an ongoing attack.",
         "command": null,
         "risk": "low",
-        "estimatedTime": "~10m",
+        "estimatedTime": "~5m",
         "rollback": null,
-        "requiresApproval": true,
+        "requiresApproval": false,
         "autoExecute": false
       },
       {
         "id": 2,
-        "title": "Check Authority Service Status",
-        "description": "Once the authoritative system is identified, verify its operational status, service health, and network reachability. Look for error messages, service stoppages, or connectivity issues from relevant clients.",
-        "command": "systemctl status <service_name> || ping <authority_ip> || nslookup <domain>",
+        "title": "Monitor Source IP for Further Activity",
+        "description": "Set up enhanced monitoring or review existing SIEM alerts for any further login attempts or other suspicious network activity originating from IP address 1.1.1.1. This is crucial to detect an escalating attack.",
+        "command": null,
         "risk": "low",
-        "estimatedTime": "~5m",
+        "estimatedTime": "~2m",
         "rollback": null,
-        "requiresApproval": true,
+        "requiresApproval": false,
         "autoExecute": false
       },
       {
         "id": 3,
-        "title": "Review Recent Configuration Changes/Events",
-        "description": "Investigate recent deployments, configuration changes, or security events on the affected system or network segment that could explain the loss of authority or reachability. Check change management logs and system event logs.",
+        "title": "Check Account Status and Lockout Policy",
+        "description": "Verify the current status of the 'ooliver' account, including its lockout status, recent successful logins, and if any automated lockout policies have been triggered. This ensures the account is protected and not compromised.",
         "command": null,
         "risk": "low",
-        "estimatedTime": "~15m",
+        "estimatedTime": "~3m",
         "rollback": null,
+        "requiresApproval": false,
+        "autoExecute": false
+      },
+      {
+        "id": 4,
+        "title": "Evaluate IP Reputation",
+        "description": "Query threat intelligence platforms and public blacklists for the reputation of IP address 1.1.1.1 to determine if it is known for malicious activities, which could indicate a coordinated attack.",
+        "command": null,
+        "risk": "low",
+        "estimatedTime": "~2m",
+        "rollback": null,
+        "requiresApproval": false,
+        "autoExecute": false
+      },
+      {
+        "id": 5,
+        "title": "Propose Temporary IP Block (if pattern confirmed)",
+        "description": "If multiple failed login attempts from 1.1.1.1 are confirmed, propose a temporary block of the source IP at the network perimeter firewall to prevent further brute-force attempts. This action requires careful consideration to avoid blocking legitimate traffic.",
+        "command": null,
+        "risk": "medium",
+        "estimatedTime": "~10m",
+        "rollback": "Remove the firewall rule blocking 1.1.1.1.",
         "requiresApproval": true,
         "autoExecute": false
       }
     ]
-  }
+  },
+  "resolution": {
+    "resolutionMode": "guided",
+    "executiveSummary": "A single failed login attempt for user 'ooliver' from IP 1.1.1.1 has been detected. This incident requires a guided investigation to determine if it's an isolated event or part of a larger attack, with a focus on user activity, IP reputation, and enhanced monitoring.",
+    "immediateActions": [
+      {
+        "id": 1,
+        "title": "Investigate User Activity",
+        "description": "Review logs for previous failed login attempts for user 'ooliver' across all relevant systems to identify any existing patterns or a history of suspicious activity. This helps determine if this is an isolated event or part of an ongoing attack.",
+        "command": null,
+        "risk": "low",
+        "estimatedTime": "~5m",
+        "rollback": null,
+        "autoExecute": false,
+        "requiresApproval": false,
+        "approvalStatus": "auto"
+      },
+      {
+        "id": 2,
+        "title": "Monitor Source IP for Further Activity",
+        "description": "Set up enhanced monitoring or review existing SIEM alerts for any further login attempts or other suspicious network activity originating from IP address 1.1.1.1. This is crucial to detect an escalating attack.",
+        "command": null,
+        "risk": "low",
+        "estimatedTime": "~2m",
+        "rollback": null,
+        "autoExecute": false,
+        "requiresApproval": false,
+        "approvalStatus": "auto"
+      },
+      {
+        "id": 3,
+        "title": "Check Account Status and Lockout Policy",
+        "description": "Verify the current status of the 'ooliver' account, including its lockout status, recent successful logins, and if any automated lockout policies have been triggered. This ensures the account is protected and not compromised.",
+        "command": null,
+        "risk": "low",
+        "estimatedTime": "~3m",
+        "rollback": null,
+        "autoExecute": false,
+        "requiresApproval": false,
+        "approvalStatus": "auto"
+      },
+      {
+        "id": 4,
+        "title": "Evaluate IP Reputation",
+        "description": "Query threat intelligence platforms and public blacklists for the reputation of IP address 1.1.1.1 to determine if it is known for malicious activities, which could indicate a coordinated attack.",
+        "command": null,
+        "risk": "low",
+        "estimatedTime": "~2m",
+        "rollback": null,
+        "autoExecute": false,
+        "requiresApproval": false,
+        "approvalStatus": "auto"
+      },
+      {
+        "id": 5,
+        "title": "Propose Temporary IP Block (if pattern confirmed)",
+        "description": "If multiple failed login attempts from 1.1.1.1 are confirmed, propose a temporary block of the source IP at the network perimeter firewall to prevent further brute-force attempts. This action requires careful consideration to avoid blocking legitimate traffic.",
+        "command": null,
+        "risk": "medium",
+        "estimatedTime": "~10m",
+        "rollback": "Remove the firewall rule blocking 1.1.1.1.",
+        "autoExecute": false,
+        "requiresApproval": true,
+        "approvalStatus": "pending"
+      }
+    ],
+    "followUpActions": [
+      {
+        "id": 1,
+        "title": "Review Authentication Policies",
+        "description": "Review and strengthen authentication policies for critical systems, including multi-factor authentication (MFA) requirements and lockout thresholds, to mitigate brute-force risks.",
+        "owner": "Identity & Access Management",
+        "deadline": "1 week"
+      },
+      {
+        "id": 2,
+        "title": "Enhance SIEM Alerting for Failed Logins",
+        "description": "Evaluate and enhance SIEM rules to detect and alert on patterns of failed login attempts more aggressively, especially from new or suspicious IP addresses.",
+        "owner": "SOC Team",
+        "deadline": "48h"
+      },
+      {
+        "id": 3,
+        "title": "Communicate with User 'ooliver'",
+        "description": "If no legitimate reason for the failed login is found, communicate with user 'ooliver' to confirm if they attempted to log in around the time of the incident and advise on password best practices.",
+        "owner": "Identity & Access Management",
+        "deadline": "24h"
+      }
+    ],
+    "postIncidentSummary": {
+      "whatHappened": "A single failed login attempt was recorded for user 'ooliver' originating from IP address 1.1.1.1. This could indicate a simple user error (typo) or an initial probe by an attacker attempting a brute-force or dictionary attack.",
+      "impactAssessment": "While no immediate compromise was detected from this single event, the potential impact includes unauthorized access to the 'ooliver' account if the attempt were successful, or account lockout due to repeated failed attempts. This event serves as an early warning for potential malicious activity.",
+      "rootCause": "The most likely root cause is either a user error (typo) or an external entity attempting to gain unauthorized access through a brute-force or dictionary attack. Without further attempts or context, it's difficult to pinpoint definitively.",
+      "lessonsLearned": "This incident highlights the importance of continuous monitoring for failed login attempts, even single occurrences, as they can be precursors to more significant attacks. Robust authentication policies, including MFA and effective lockout mechanisms, are crucial. Regular review of IP reputation and threat intelligence integration can help identify and block malicious sources proactively."
+    }
+  },
+  "resolved_at": "2026-03-08T10:34:10.234888+00:00"
 }
