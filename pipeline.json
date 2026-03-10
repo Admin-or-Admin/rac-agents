@@ -1,85 +1,63 @@
 {
-  "log": "%AUTH-4-LOGIN_FAILED: Login failed for user 'ooliver' from host 1.1.1.1",
+  "log": "%SEC-6-IPACCESSLOGP: list 101 denied tcp 10.0.0.240(39834) -> 10.0.0.41(22), 1 packet",
   "classification": {
     "category": "security",
     "severity": "medium",
     "tags": [
-      "authentication",
-      "login",
-      "failed",
-      "access"
+      "firewall",
+      "access-control",
+      "denied",
+      "tcp"
     ],
     "isCybersecurity": true,
     "sendToInvestigationAgent": true,
     "classificationConfidence": 95,
-    "reasoning": "The log explicitly reports a failed login attempt, which is a direct security event indicating potential unauthorized access or brute-force activity."
+    "reasoning": "This log indicates a firewall rule denied a TCP connection attempt to port 22, which is relevant to cybersecurity and may indicate a potential unauthorized access attempt."
   },
   "investigation": {
-    "aiSuggestion": "A single failed login attempt for user 'ooliver' from IP 1.1.1.1 has been detected. While this could be a simple typo, it's crucial to monitor for subsequent attempts from this source or against this user, as it often signifies an initial probe for a brute-force or dictionary attack. Immediate investigation is required to determine if this is an isolated incident or part of a larger malicious campaign.",
-    "attackVector": "Potential brute-force or dictionary attack attempt against user 'ooliver'.",
-    "recurrenceRate": 20,
-    "confidence": 75,
+    "aiSuggestion": "A firewall rule has blocked a TCP connection attempt from 10.0.0.240 to 10.0.0.41 on port 22 (SSH). This may indicate a potential unauthorized access attempt or scanning activity targeting SSH services.",
+    "attackVector": "Unauthorized SSH access attempt or reconnaissance scan",
+    "recurrenceRate": 40,
+    "confidence": 90,
     "complexity": "simple",
     "autoFixable": false,
-    "requiresHumanApproval": true,
+    "requiresHumanApproval": false,
     "priority": 3,
     "notifyTeams": [
-      "SOC Team",
-      "Identity & Access Management"
+      "Network Security",
+      "SOC Tier 1"
     ],
     "proposedSteps": [
       {
         "id": 1,
-        "title": "Investigate User Activity",
-        "description": "Review logs for previous failed login attempts for user 'ooliver' across all relevant systems to identify any existing patterns or a history of suspicious activity. This helps determine if this is an isolated event or part of an ongoing attack.",
-        "command": null,
+        "title": "Review Source Activity",
+        "description": "Check recent logs for repeated or similar denied attempts from 10.0.0.240 to identify possible brute-force or scanning behavior.",
+        "command": "grep '10.0.0.240' /var/log/firewall.log",
         "risk": "low",
-        "estimatedTime": "~5m",
+        "estimatedTime": "~30s",
         "rollback": null,
         "requiresApproval": false,
-        "autoExecute": false
+        "autoExecute": true
       },
       {
         "id": 2,
-        "title": "Monitor Source IP for Further Activity",
-        "description": "Set up enhanced monitoring or review existing SIEM alerts for any further login attempts or other suspicious network activity originating from IP address 1.1.1.1. This is crucial to detect an escalating attack.",
-        "command": null,
+        "title": "Validate Firewall Rules",
+        "description": "Ensure that firewall rules are correctly configured to block unauthorized SSH access and that no exceptions exist for 10.0.0.240.",
+        "command": "show access-lists | include 101",
         "risk": "low",
-        "estimatedTime": "~2m",
+        "estimatedTime": "~30s",
         "rollback": null,
         "requiresApproval": false,
-        "autoExecute": false
+        "autoExecute": true
       },
       {
         "id": 3,
-        "title": "Check Account Status and Lockout Policy",
-        "description": "Verify the current status of the 'ooliver' account, including its lockout status, recent successful logins, and if any automated lockout policies have been triggered. This ensures the account is protected and not compromised.",
-        "command": null,
-        "risk": "low",
-        "estimatedTime": "~3m",
-        "rollback": null,
-        "requiresApproval": false,
-        "autoExecute": false
-      },
-      {
-        "id": 4,
-        "title": "Evaluate IP Reputation",
-        "description": "Query threat intelligence platforms and public blacklists for the reputation of IP address 1.1.1.1 to determine if it is known for malicious activities, which could indicate a coordinated attack.",
-        "command": null,
-        "risk": "low",
-        "estimatedTime": "~2m",
-        "rollback": null,
-        "requiresApproval": false,
-        "autoExecute": false
-      },
-      {
-        "id": 5,
-        "title": "Propose Temporary IP Block (if pattern confirmed)",
-        "description": "If multiple failed login attempts from 1.1.1.1 are confirmed, propose a temporary block of the source IP at the network perimeter firewall to prevent further brute-force attempts. This action requires careful consideration to avoid blocking legitimate traffic.",
+        "title": "Investigate Source Host",
+        "description": "Investigate the user and process on 10.0.0.240 responsible for the connection attempt to determine if it is legitimate or malicious.",
         "command": null,
         "risk": "medium",
-        "estimatedTime": "~10m",
-        "rollback": "Remove the firewall rule blocking 1.1.1.1.",
+        "estimatedTime": "~30s",
+        "rollback": null,
         "requiresApproval": true,
         "autoExecute": false
       }
@@ -87,64 +65,40 @@
   },
   "resolution": {
     "resolutionMode": "guided",
-    "executiveSummary": "A single failed login attempt for user 'ooliver' from IP 1.1.1.1 has been detected. This incident requires a guided investigation to determine if it's an isolated event or part of a larger attack, with a focus on user activity, IP reputation, and enhanced monitoring.",
+    "executiveSummary": "A firewall rule blocked a TCP connection attempt from 10.0.0.240 to 10.0.0.41 on port 22 (SSH), indicating a possible unauthorized access attempt or reconnaissance scan. The resolution plan involves reviewing source activity, validating firewall rules, and investigating the source host to determine intent and prevent recurrence.",
     "immediateActions": [
       {
         "id": 1,
-        "title": "Investigate User Activity",
-        "description": "Review logs for previous failed login attempts for user 'ooliver' across all relevant systems to identify any existing patterns or a history of suspicious activity. This helps determine if this is an isolated event or part of an ongoing attack.",
-        "command": null,
+        "title": "Review Source Activity",
+        "description": "Check recent logs for repeated or similar denied attempts from 10.0.0.240 to identify possible brute-force or scanning behavior. This is safe and helps detect ongoing or automated attacks.",
+        "command": "grep '10.0.0.240' /var/log/firewall.log",
         "risk": "low",
-        "estimatedTime": "~5m",
+        "estimatedTime": "~30s",
         "rollback": null,
-        "autoExecute": false,
+        "autoExecute": true,
         "requiresApproval": false,
         "approvalStatus": "auto"
       },
       {
         "id": 2,
-        "title": "Monitor Source IP for Further Activity",
-        "description": "Set up enhanced monitoring or review existing SIEM alerts for any further login attempts or other suspicious network activity originating from IP address 1.1.1.1. This is crucial to detect an escalating attack.",
-        "command": null,
+        "title": "Validate Firewall Rules",
+        "description": "Ensure that firewall rules are correctly configured to block unauthorized SSH access and that no exceptions exist for 10.0.0.240. This prevents accidental exposure of SSH and is a safe verification step.",
+        "command": "show access-lists | include 101",
         "risk": "low",
-        "estimatedTime": "~2m",
+        "estimatedTime": "~30s",
         "rollback": null,
-        "autoExecute": false,
+        "autoExecute": true,
         "requiresApproval": false,
         "approvalStatus": "auto"
       },
       {
         "id": 3,
-        "title": "Check Account Status and Lockout Policy",
-        "description": "Verify the current status of the 'ooliver' account, including its lockout status, recent successful logins, and if any automated lockout policies have been triggered. This ensures the account is protected and not compromised.",
-        "command": null,
-        "risk": "low",
-        "estimatedTime": "~3m",
-        "rollback": null,
-        "autoExecute": false,
-        "requiresApproval": false,
-        "approvalStatus": "auto"
-      },
-      {
-        "id": 4,
-        "title": "Evaluate IP Reputation",
-        "description": "Query threat intelligence platforms and public blacklists for the reputation of IP address 1.1.1.1 to determine if it is known for malicious activities, which could indicate a coordinated attack.",
-        "command": null,
-        "risk": "low",
-        "estimatedTime": "~2m",
-        "rollback": null,
-        "autoExecute": false,
-        "requiresApproval": false,
-        "approvalStatus": "auto"
-      },
-      {
-        "id": 5,
-        "title": "Propose Temporary IP Block (if pattern confirmed)",
-        "description": "If multiple failed login attempts from 1.1.1.1 are confirmed, propose a temporary block of the source IP at the network perimeter firewall to prevent further brute-force attempts. This action requires careful consideration to avoid blocking legitimate traffic.",
+        "title": "Investigate Source Host",
+        "description": "Investigate the user and process on 10.0.0.240 responsible for the connection attempt to determine if it is legitimate or malicious. This step is necessary to confirm intent and may require coordination with endpoint or user teams.",
         "command": null,
         "risk": "medium",
-        "estimatedTime": "~10m",
-        "rollback": "Remove the firewall rule blocking 1.1.1.1.",
+        "estimatedTime": "~30s",
+        "rollback": null,
         "autoExecute": false,
         "requiresApproval": true,
         "approvalStatus": "pending"
@@ -153,32 +107,32 @@
     "followUpActions": [
       {
         "id": 1,
-        "title": "Review Authentication Policies",
-        "description": "Review and strengthen authentication policies for critical systems, including multi-factor authentication (MFA) requirements and lockout thresholds, to mitigate brute-force risks.",
-        "owner": "Identity & Access Management",
-        "deadline": "1 week"
+        "title": "Report and Remediate Source Host if Malicious",
+        "description": "If the investigation finds malicious activity on 10.0.0.240, isolate the host and perform a full malware scan and remediation.",
+        "owner": "Network Security",
+        "deadline": "24h"
       },
       {
         "id": 2,
-        "title": "Enhance SIEM Alerting for Failed Logins",
-        "description": "Evaluate and enhance SIEM rules to detect and alert on patterns of failed login attempts more aggressively, especially from new or suspicious IP addresses.",
-        "owner": "SOC Team",
+        "title": "Review SSH Access Policies",
+        "description": "Audit and update SSH access policies to ensure only authorized hosts can connect to critical systems.",
+        "owner": "Network Security",
         "deadline": "48h"
       },
       {
         "id": 3,
-        "title": "Communicate with User 'ooliver'",
-        "description": "If no legitimate reason for the failed login is found, communicate with user 'ooliver' to confirm if they attempted to log in around the time of the incident and advise on password best practices.",
-        "owner": "Identity & Access Management",
+        "title": "Monitor for Recurrence",
+        "description": "Increase monitoring for repeated denied SSH attempts from internal hosts to detect further reconnaissance or attack attempts.",
+        "owner": "SOC Tier 1",
         "deadline": "24h"
       }
     ],
     "postIncidentSummary": {
-      "whatHappened": "A single failed login attempt was recorded for user 'ooliver' originating from IP address 1.1.1.1. This could indicate a simple user error (typo) or an initial probe by an attacker attempting a brute-force or dictionary attack.",
-      "impactAssessment": "While no immediate compromise was detected from this single event, the potential impact includes unauthorized access to the 'ooliver' account if the attempt were successful, or account lockout due to repeated failed attempts. This event serves as an early warning for potential malicious activity.",
-      "rootCause": "The most likely root cause is either a user error (typo) or an external entity attempting to gain unauthorized access through a brute-force or dictionary attack. Without further attempts or context, it's difficult to pinpoint definitively.",
-      "lessonsLearned": "This incident highlights the importance of continuous monitoring for failed login attempts, even single occurrences, as they can be precursors to more significant attacks. Robust authentication policies, including MFA and effective lockout mechanisms, are crucial. Regular review of IP reputation and threat intelligence integration can help identify and block malicious sources proactively."
+      "whatHappened": "A firewall rule denied a TCP connection attempt from 10.0.0.240 to 10.0.0.41 on port 22, which may indicate an unauthorized SSH access attempt or reconnaissance scan.",
+      "impactAssessment": "No successful access occurred; the firewall prevented the connection. However, repeated attempts could indicate a compromised internal host or an insider threat.",
+      "rootCause": "Likely an unauthorized or misconfigured process on 10.0.0.240 attempting to access SSH on 10.0.0.41.",
+      "lessonsLearned": "Regularly review firewall logs and rules, monitor for internal reconnaissance, and ensure endpoint security controls are enforced on all internal hosts."
     }
   },
-  "resolved_at": "2026-03-08T10:34:10.234888+00:00"
+  "resolved_at": "2026-03-10T11:40:45.771771+00:00"
 }

@@ -3,18 +3,11 @@ import json
 import time
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import ChatPromptTemplate
-from langchain.schema.output_parser import StrOutputParser
 from kafka_client import AuroraProducer, AuroraConsumer
+from llm_router import invoke_with_rotation, get_current_provider
 
 load_dotenv()
-
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=os.getenv("GEMINI_API_KEY"),
-    temperature=0.0,
-)
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", """You are an autonomous incident response AI in a Security Operations Center.
@@ -67,8 +60,6 @@ Classification: {classification}
 Investigation findings: {investigation}"""),
 ])
 
-chain = prompt | llm | StrOutputParser()
-
 KAFKA_BOOTSTRAP_SERVERS = [os.getenv("KAFKA_BROKERS", "localhost:29092")]
 INPUT_TOPIC     = "logs.solver_plan"
 OUTPUT_TOPIC    = "logs.solution"
@@ -97,6 +88,7 @@ def publish_heartbeat(producer: AuroraProducer):
         "timestamp":    datetime.now(timezone.utc).isoformat(),
         "status":       "alive",
         "uptime_since": _stats["started_at"],
+        "active_llm":   get_current_provider(),
     }
     try:
         producer.send_log(ANALYTICS_TOPIC, heartbeat)
@@ -213,8 +205,9 @@ def resolve_and_publish(log_text: str, classification: dict, investigation: dict
     print(f"\n  Generating resolution plan...")
     start = time.time()
 
-    raw = chain.invoke({
-        "log": log_text,
+    print(f"  Generating resolution plan via {get_current_provider()}...")
+    raw = invoke_with_rotation(prompt, {
+        "log":            log_text,
         "classification": json.dumps(classification, indent=2),
         "investigation":  json.dumps(investigation, indent=2),
     })

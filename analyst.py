@@ -3,18 +3,11 @@ import json
 import time
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import ChatPromptTemplate
-from langchain.schema.output_parser import StrOutputParser
 from kafka_client import AuroraProducer, AuroraConsumer
+from llm_router import invoke_with_rotation, get_current_provider
 
 load_dotenv()
-
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=os.getenv("GEMINI_API_KEY"),
-    temperature=0.1,
-)
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", """You are a senior cybersecurity analyst AI in a Security Operations Center.
@@ -53,8 +46,6 @@ Log: {log}
 Classification: {classification}"""),
 ])
 
-chain = prompt | llm | StrOutputParser()
-
 KAFKA_BOOTSTRAP_SERVERS = [os.getenv("KAFKA_BROKERS", "localhost:29092")]
 INPUT_TOPIC     = "logs.categories"
 OUTPUT_TOPIC    = "logs.solver_plan"
@@ -65,27 +56,24 @@ MIN_CONFIDENCE = int(os.getenv("MIN_CLASSIFICATION_CONFIDENCE", "70"))
 # ── In-memory stats ───────────────────────────────────────────────────────────
 
 _stats = {
-    "received":         0,
-    "investigated":     0,
-    "skipped_confidence": 0,
-    "skipped_not_security": 0,
-    "simple":           0,
-    "complex":          0,
-    "auto_fixable":     0,
-    "requires_human":   0,
-    "total_steps":      0,
-    "processing_ms_total": 0,
-    "started_at":       datetime.now(timezone.utc).isoformat(),
+    "received":               0,
+    "investigated":           0,
+    "skipped_confidence":     0,
+    "skipped_not_security":   0,
+    "simple":                 0,
+    "complex":                0,
+    "auto_fixable":           0,
+    "requires_human":         0,
+    "total_steps":            0,
+    "processing_ms_total":    0,
+    "started_at":             datetime.now(timezone.utc).isoformat(),
 }
 
 # ── Analytics helpers ─────────────────────────────────────────────────────────
 
 def publish_heartbeat(producer: AuroraProducer):
     investigated = _stats["investigated"]
-    avg_ms = (
-        round(_stats["processing_ms_total"] / investigated)
-        if investigated > 0 else 0
-    )
+    avg_ms = round(_stats["processing_ms_total"] / investigated) if investigated > 0 else 0
 
     heartbeat = {
         "agent":            "analyst",
@@ -93,11 +81,12 @@ def publish_heartbeat(producer: AuroraProducer):
         "timestamp":        datetime.now(timezone.utc).isoformat(),
         "status":           "alive",
         "uptime_since":     _stats["started_at"],
+        "active_llm":       get_current_provider(),
         "confidence_threshold": MIN_CONFIDENCE,
         "quick_stats": {
-            "received":     _stats["received"],
-            "investigated": investigated,
-            "skipped":      _stats["skipped_confidence"] + _stats["skipped_not_security"],
+            "received":          _stats["received"],
+            "investigated":      investigated,
+            "skipped":           _stats["skipped_confidence"] + _stats["skipped_not_security"],
             "avg_processing_ms": avg_ms,
         },
     }
@@ -105,13 +94,13 @@ def publish_heartbeat(producer: AuroraProducer):
     try:
         producer.send_log(ANALYTICS_TOPIC, heartbeat)
         producer.flush()
-        print(f"  [Analytics] Heartbeat published")
+        print(f"  [Analytics] Heartbeat published (active LLM: {get_current_provider()})")
     except Exception as e:
         print(f"  [Analytics] Heartbeat failed: {e}")
 
 
 def publish_investigation_analytics(producer: AuroraProducer, result: dict, classification: dict, processing_time_ms: int):
-    _stats["investigated"]      += 1
+    _stats["investigated"]        += 1
     _stats["processing_ms_total"] += processing_time_ms
 
     complexity = result.get("complexity", "simple")
@@ -122,7 +111,6 @@ def publish_investigation_analytics(producer: AuroraProducer, result: dict, clas
 
     if result.get("autoFixable"):
         _stats["auto_fixable"] += 1
-
     if result.get("requiresHumanApproval"):
         _stats["requires_human"] += 1
 
@@ -132,58 +120,57 @@ def publish_investigation_analytics(producer: AuroraProducer, result: dict, clas
     investigated = _stats["investigated"]
 
     analytics = {
-        "agent":        "analyst",
-        "event":        "investigation_produced",
-        "timestamp":    datetime.now(timezone.utc).isoformat(),
+        "agent":     "analyst",
+        "event":     "investigation_produced",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "llm_used":  get_current_provider(),
 
-        # This investigation
         "incident": {
-            "severity":           classification.get("severity"),
-            "category":           classification.get("category"),
-            "tags":               classification.get("tags", []),
+            "severity":                  classification.get("severity"),
+            "category":                  classification.get("category"),
+            "tags":                      classification.get("tags", []),
             "classification_confidence": classification.get("classificationConfidence"),
-            "attack_vector":      result.get("attackVector"),
-            "complexity":         complexity,
-            "priority":           result.get("priority"),
-            "recurrence_rate":    result.get("recurrenceRate"),
-            "auto_fixable":       result.get("autoFixable"),
-            "requires_human":     result.get("requiresHumanApproval"),
-            "notify_teams":       result.get("notifyTeams", []),
-            "steps_proposed":     len(steps),
-            "processing_time_ms": processing_time_ms,
+            "attack_vector":             result.get("attackVector"),
+            "complexity":                complexity,
+            "priority":                  result.get("priority"),
+            "recurrence_rate":           result.get("recurrenceRate"),
+            "auto_fixable":              result.get("autoFixable"),
+            "requires_human":            result.get("requiresHumanApproval"),
+            "notify_teams":              result.get("notifyTeams", []),
+            "steps_proposed":            len(steps),
+            "processing_time_ms":        processing_time_ms,
             "steps_breakdown": {
-                "auto_execute":      sum(1 for s in steps if s.get("autoExecute")),
-                "requires_approval": sum(1 for s in steps if s.get("requiresApproval")),
-                "risk_low":          sum(1 for s in steps if s.get("risk") == "low"),
-                "risk_medium":       sum(1 for s in steps if s.get("risk") == "medium"),
-                "risk_high":         sum(1 for s in steps if s.get("risk") == "high"),
+                "auto_execute":       sum(1 for s in steps if s.get("autoExecute")),
+                "requires_approval":  sum(1 for s in steps if s.get("requiresApproval")),
+                "risk_low":           sum(1 for s in steps if s.get("risk") == "low"),
+                "risk_medium":        sum(1 for s in steps if s.get("risk") == "medium"),
+                "risk_high":          sum(1 for s in steps if s.get("risk") == "high"),
             },
         },
 
-        # Cumulative stats for lifetime of this process
         "cumulative": {
-            "total_received":           _stats["received"],
-            "total_investigated":        investigated,
-            "total_skipped_confidence":  _stats["skipped_confidence"],
-            "total_skipped_not_security": _stats["skipped_not_security"],
-            "total_skipped":             _stats["skipped_confidence"] + _stats["skipped_not_security"],
-            "investigation_rate_pct":    round(investigated / _stats["received"] * 100, 1) if _stats["received"] > 0 else 0,
-            "simple":                    _stats["simple"],
-            "complex":                   _stats["complex"],
-            "auto_fixable":              _stats["auto_fixable"],
-            "requires_human":            _stats["requires_human"],
-            "total_steps_proposed":      _stats["total_steps"],
-            "avg_processing_ms":         round(_stats["processing_ms_total"] / investigated) if investigated > 0 else 0,
-            "agent_started_at":          _stats["started_at"],
+            "total_received":              _stats["received"],
+            "total_investigated":          investigated,
+            "total_skipped_confidence":    _stats["skipped_confidence"],
+            "total_skipped_not_security":  _stats["skipped_not_security"],
+            "total_skipped":               _stats["skipped_confidence"] + _stats["skipped_not_security"],
+            "investigation_rate_pct":      round(investigated / _stats["received"] * 100, 1) if _stats["received"] > 0 else 0,
+            "simple":                      _stats["simple"],
+            "complex":                     _stats["complex"],
+            "auto_fixable":                _stats["auto_fixable"],
+            "requires_human":              _stats["requires_human"],
+            "total_steps_proposed":        _stats["total_steps"],
+            "avg_processing_ms":           round(_stats["processing_ms_total"] / investigated) if investigated > 0 else 0,
+            "agent_started_at":            _stats["started_at"],
         },
     }
 
     try:
         producer.send_log(ANALYTICS_TOPIC, analytics)
         producer.flush()
-        print(f"  [Analytics] Published investigation analytics to {ANALYTICS_TOPIC}")
+        print(f"  [Analytics] Published to {ANALYTICS_TOPIC}")
     except Exception as e:
-        print(f"  [Analytics] Failed to publish analytics: {e}")
+        print(f"  [Analytics] Failed: {e}")
 
 
 def publish_skip_analytics(producer: AuroraProducer, reason: str, classification: dict):
@@ -198,9 +185,9 @@ def publish_skip_analytics(producer: AuroraProducer, reason: str, classification
             "confidence": classification.get("classificationConfidence"),
         },
         "cumulative": {
-            "total_received":            _stats["received"],
-            "total_skipped_confidence":  _stats["skipped_confidence"],
-            "total_skipped_not_security": _stats["skipped_not_security"],
+            "total_received":              _stats["received"],
+            "total_skipped_confidence":    _stats["skipped_confidence"],
+            "total_skipped_not_security":  _stats["skipped_not_security"],
         },
     }
 
@@ -214,11 +201,11 @@ def publish_skip_analytics(producer: AuroraProducer, reason: str, classification
 # ── Core investigation logic ──────────────────────────────────────────────────
 
 def investigate_and_publish(log_text: str, classification: dict, producer: AuroraProducer):
-    print(f"\n  [ANALYST] Investigating threat...")
+    print(f"\n  [ANALYST] Investigating threat via {get_current_provider()}...")
     start = time.time()
 
-    raw = chain.invoke({
-        "log": log_text,
+    raw = invoke_with_rotation(prompt, {
+        "log":            log_text,
         "classification": json.dumps(classification, indent=2),
     })
     raw = raw.replace("```json", "").replace("```", "").strip()
@@ -233,7 +220,7 @@ def investigate_and_publish(log_text: str, classification: dict, producer: Auror
     print(f"   Priority        : {result.get('priority')}/5")
     print(f"   Notify Teams    : {', '.join(result.get('notifyTeams', []))}")
     print(f"   Analysis        : {result.get('aiSuggestion')}")
-    print(f"   Processing time : {processing_time_ms}ms")
+    print(f"   Processing time : {processing_time_ms}ms  |  LLM: {get_current_provider()}")
 
     payload = {
         "log":            log_text,
@@ -241,12 +228,10 @@ def investigate_and_publish(log_text: str, classification: dict, producer: Auror
         "investigation":  result,
     }
 
-    # Write to pipeline.json for responder.py
     with open("pipeline.json", "w") as f:
         json.dump(payload, f, indent=2)
     print("   Written to pipeline.json")
 
-    # Publish to Kafka logs.solver_plan
     try:
         producer.send_log(OUTPUT_TOPIC, payload, key=log_text[:50])
         producer.flush()
@@ -254,7 +239,6 @@ def investigate_and_publish(log_text: str, classification: dict, producer: Auror
     except Exception as e:
         print(f"   Kafka publish failed (pipeline.json still written): {e}")
 
-    # Publish analytics
     publish_investigation_analytics(producer, result, classification, processing_time_ms)
 
     return result
@@ -281,7 +265,6 @@ def start_kafka_consumer():
     print(f"Connected - listening on {INPUT_TOPIC}...")
     print(f"Confidence threshold: {MIN_CONFIDENCE}% (set MIN_CLASSIFICATION_CONFIDENCE in .env to change)\n")
 
-    # Send initial heartbeat on startup
     publish_heartbeat(producer)
 
     last_heartbeat = time.time()
@@ -289,7 +272,6 @@ def start_kafka_consumer():
 
     try:
         for message in consumer:
-            # Heartbeat between messages
             now = time.time()
             if now - last_heartbeat >= HEARTBEAT_INTERVAL:
                 publish_heartbeat(producer)
@@ -315,14 +297,12 @@ def start_kafka_consumer():
 
                 print(f"\n[ANALYST] Received [{category.upper()}] severity={severity} confidence={confidence}%")
 
-                # Filter 1: low confidence
                 if confidence < MIN_CONFIDENCE:
                     _stats["skipped_confidence"] += 1
                     print(f"  Skipping - confidence {confidence}% below threshold {MIN_CONFIDENCE}%")
                     publish_skip_analytics(producer, "low_confidence", classification)
                     continue
 
-                # Filter 2: not a security concern
                 if not send_to_agent or not is_security:
                     _stats["skipped_not_security"] += 1
                     print(f"  Skipping - not flagged as a security concern")
@@ -342,7 +322,7 @@ def start_kafka_consumer():
         producer.close()
 
 
-# ── Manual mode (reads from pipeline.json) ────────────────────────────────────
+# ── Manual mode ───────────────────────────────────────────────────────────────
 
 def manual_mode():
     print("\n╔══════════════════════════════════════════╗")

@@ -116,3 +116,6 @@ kafka-logs/
 *.p12
 *.pfx
 secrets/
+
+
+classifierKnowledge/.cache/
