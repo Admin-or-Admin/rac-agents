@@ -1,0 +1,8 @@
+python-dotenv
+kafka-python
+langchain
+langchain-google-genai
+langchain-openai
+openai
+pymupdf
+python-docx
