@@ -211,7 +211,7 @@ def investigate_and_publish(log_text: str, classification: dict, producer: Auror
     start = time.time()
 
     # Retrieve relevant knowledge chunks for this specific threat
-    rag_query = f"{log_text} {classification.get("category", "")} {classification.get("severity", "")}"
+    rag_query = f"{log_text} {classification.get('category', '')} {classification.get('severity', '')}"
     knowledge_context = _knowledge.retrieve(rag_query)
     if knowledge_context:
         knowledge_context = f"Relevant knowledge from internal knowledge base:\n{knowledge_context}"
