@@ -6,8 +6,12 @@ from dotenv import load_dotenv
 from langchain.prompts import ChatPromptTemplate
 from kafka_client import AuroraProducer, AuroraConsumer
 from llm_router import invoke_with_rotation, get_current_provider
+from responderKnowledge_loader import load_knowledge_store
 
 load_dotenv()
+
+# Load knowledge base on startup — cached after first load
+_knowledge = load_knowledge_store()
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", """You are an autonomous incident response AI in a Security Operations Center.
@@ -57,7 +61,9 @@ autoExecute must only be true if risk is low AND requiresApproval is false."""),
 
 Log: {log}
 Classification: {classification}
-Investigation findings: {investigation}"""),
+Investigation findings: {investigation}
+
+{knowledge_context}"""),
 ])
 
 KAFKA_BOOTSTRAP_SERVERS = [os.getenv("KAFKA_BROKERS", "localhost:29092")]
@@ -202,14 +208,24 @@ def publish_human_decision_analytics(producer: AuroraProducer, step_id: int, dec
 # ── Core resolution logic ─────────────────────────────────────────────────────
 
 def resolve_and_publish(log_text: str, classification: dict, investigation: dict, producer: AuroraProducer):
-    print(f"\n  Generating resolution plan...")
+    print(f"\n  Generating resolution plan via {get_current_provider()}...")
     start = time.time()
 
-    print(f"  Generating resolution plan via {get_current_provider()}...")
+    # Retrieve relevant knowledge for this incident
+    rag_query = f"{log_text} {investigation.get(\"attackVector\", \"\")}" \
+                f" {classification.get(\"category\", \"\"")}"
+    knowledge_context = _knowledge.retrieve(rag_query)
+    if knowledge_context:
+        knowledge_context = f"Relevant knowledge from internal knowledge base:\n{knowledge_context}"
+        print(f"  [RESPONDER] RAG: injecting {len(knowledge_context.split())} words of context")
+    else:
+        knowledge_context = ""
+
     raw = invoke_with_rotation(prompt, {
-        "log":            log_text,
-        "classification": json.dumps(classification, indent=2),
-        "investigation":  json.dumps(investigation, indent=2),
+        "log":               log_text,
+        "classification":    json.dumps(classification, indent=2),
+        "investigation":     json.dumps(investigation, indent=2),
+        "knowledge_context": knowledge_context,
     })
     raw = raw.replace("```json", "").replace("```", "").strip()
     result = json.loads(raw)

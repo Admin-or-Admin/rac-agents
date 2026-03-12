@@ -1,57 +1,59 @@
 # rac-agents
 
-**Recognise. Analyse. Classify.**
+Three autonomous AI agents that form the cybersecurity processing pipeline for the CyberControl platform. Raw logs come in one end, categorised threats with full remediation plans come out the other.
 
-Three autonomous AI agents that form a cybersecurity pipeline. Raw logs come in one end, categorised threats with remediation plans come out the other. Each agent is a standalone Python process that communicates through Apache Kafka, which means you can run them on separate machines, scale them independently, or swap one out without touching the others.
-
-This document covers what each agent does, how to set everything up from scratch, and how the pieces fit together.
+Each agent is a standalone Python process that communicates through Apache Kafka. They can run on separate machines, scale independently, or be restarted without affecting the others. All three also support a manual mode for local testing without Kafka.
 
 ---
 
-## Table of Contents
+## Table of contents
 
-- [How it works](#how-it-works)
+- [How the pipeline works](#how-the-pipeline-works)
 - [Agents](#agents)
   - [Classifier](#classifier)
   - [Analyst](#analyst)
   - [Responder](#responder)
+- [LLM router](#llm-router)
 - [Kafka topics](#kafka-topics)
+- [Kafka client](#kafka-client)
 - [Analytics](#analytics)
-- [Knowledge base](#knowledge-base)
+- [Knowledge bases (RAG)](#knowledge-bases-rag)
 - [Project structure](#project-structure)
 - [Setup](#setup)
-- [Configuration](#configuration)
+- [Environment variables](#environment-variables)
 - [Running the agents](#running-the-agents)
-- [Pipeline JSON fallback](#pipeline-json-fallback)
-- [Adding a new knowledge file](#adding-a-new-knowledge-file)
+- [Manual mode](#manual-mode)
+- [pipeline.json](#pipelinejson)
 
 ---
 
-## How it works
+## How the pipeline works
 
-Every log that enters the system goes through three stages in sequence.
-
-The classifier reads raw logs from the `logs.unfiltered` Kafka topic, sends each one to Gemini for classification, and publishes the result to `logs.categories`. The analyst reads from `logs.categories`, filters out anything below the confidence threshold or not flagged as a security concern, and investigates the rest using Gemini with cross-domain context. It publishes investigation results to `logs.solver_plan`. The responder reads from `logs.solver_plan`, generates a concrete remediation plan with per-step risk levels and approval requirements, and publishes the final output to `logs.solution`.
-
-All three agents also publish operational events to the `analytics` topic so you have full visibility into what each agent is doing, how long things take, and whether they are alive.
+Every log that enters the system flows through three stages in sequence. Each stage reads from one Kafka topic and writes to the next.
 
 ```
 logs.unfiltered
-      |
-  classifier
-      |
+      │
+  [Classifier]  ──── classifierKnowledge/ (RAG)
+      │
 logs.categories
-      |
-   analyst
-      |
+      │
+   [Analyst]    ──── analystKnowledge/ (RAG)
+      │
 logs.solver_plan
-      |
-  responder
-      |
+      │
+  [Responder]   ──── responderKnowledge/ (RAG)
+      │
  logs.solution
-      |
-   analytics  <-- all three agents publish here in parallel
+      │
+  [Ledger] ──► PostgreSQL ──► Gateway ──► Dashboard
+
+  analytics  ◄── all three agents publish here in parallel
 ```
+
+The classifier reads raw log strings, classifies them, and publishes the result. The analyst reads classified logs, filters out low-confidence or non-security events, and investigates the rest. The responder reads investigation results and produces executable remediation plans. All three publish heartbeats and event statistics to the `analytics` topic in parallel.
+
+Each agent also loads a knowledge base from a local folder on startup. Relevant chunks are retrieved and injected into the prompt for every LLM call — this is the RAG layer that lets you teach the agents about your specific environment without modifying any code.
 
 ---
 
@@ -59,71 +61,150 @@ logs.solver_plan
 
 ### Classifier
 
-**File:** `classifier.py`
-**Reads from:** `logs.unfiltered`
-**Writes to:** `logs.categories`, `analytics`
+**File:** `classifier.py`  
+**Reads from:** `logs.unfiltered`  
+**Writes to:** `logs.categories`, `analytics`  
+**Knowledge folder:** `classifierKnowledge/`
 
-The classifier is the entry point of the pipeline. It takes a raw log message in whatever format it arrives and asks Gemini to make sense of it. The output is a structured JSON object that every downstream agent depends on.
+The entry point of the pipeline. Takes a raw log string in any format and produces a structured classification.
 
-For each log it produces:
+**What it produces per log:**
 
-- `category` — one of `security`, `infrastructure`, `application`, or `deployment`
-- `severity` — one of `critical`, `high`, `medium`, `low`, or `info`
-- `tags` — two to five lowercase descriptive tags
-- `isCybersecurity` — whether this log has any security relevance
-- `sendToInvestigationAgent` — whether the analyst should pick it up. This is true only when `isCybersecurity` is true and severity is not `info`
-- `classificationConfidence` — integer from 0 to 100 representing how confident the model is in its classification
-- `reasoning` — one sentence explaining why it was classified this way
+| Field | Type | Description |
+|---|---|---|
+| `category` | string | `security`, `infrastructure`, `application`, or `deployment` |
+| `severity` | string | `critical`, `high`, `medium`, `low`, or `info` |
+| `tags` | string[] | 2–5 lowercase descriptive tags |
+| `isCybersecurity` | bool | Whether this log has any security relevance |
+| `sendToInvestigationAgent` | bool | True only if `isCybersecurity` is true AND severity is not `info` |
+| `classificationConfidence` | int | 0–100, model confidence in this classification |
+| `reasoning` | string | One sentence explaining the classification decision |
 
-The classifier runs in two modes controlled by the `CLASSIFIER_MODE` environment variable. In `manual` mode it reads from stdin so you can paste individual log lines for testing. In `kafka` mode it sits and listens on `logs.unfiltered` continuously.
+The classifier runs in `manual` mode (reads from stdin, good for testing individual logs) or `kafka` mode (listens on `logs.unfiltered` continuously). Controlled by `CLASSIFIER_MODE` in `.env`.
 
-If there are files in the `knowledge/` folder, their contents are injected into the system prompt before every classification call. This is how you teach the classifier about your company's specific log formats, GDPR requirements, or any custom categorisation rules. See the [Knowledge base](#knowledge-base) section for details.
+**RAG query:** the raw log text itself is used as the retrieval query. The most relevant chunks from `classifierKnowledge/` are injected into the system prompt before each classification call.
 
 ---
 
 ### Analyst
 
-**File:** `analyst.py`
-**Reads from:** `logs.categories`
-**Writes to:** `logs.solver_plan`, `analytics`
+**File:** `analyst.py`  
+**Reads from:** `logs.categories`  
+**Writes to:** `logs.solver_plan`, `analytics`  
+**Knowledge folder:** `analystKnowledge/`
 
-The analyst receives classified logs and decides which ones are worth investigating. It applies two filters before spending any tokens on analysis.
+The analyst receives classified logs and investigates the ones that matter. It applies two filters before spending any tokens:
 
-The first filter is confidence. Any log where `classificationConfidence` is below `MIN_CLASSIFICATION_CONFIDENCE` is dropped with a skip event published to `analytics`. The threshold is configurable in `.env`. Setting it to `0` disables the filter entirely and passes everything through. Raising it means fewer logs get investigated but with higher-quality input. Lowering it means more coverage but with noisier data.
+**Filter 1 — confidence threshold.** If `classificationConfidence` is below `MIN_CLASSIFICATION_CONFIDENCE`, the log is dropped and a `log_skipped` event with reason `low_confidence` is published to `analytics`. Set `MIN_CLASSIFICATION_CONFIDENCE=0` in `.env` to disable this filter entirely.
 
-The second filter is security relevance. Logs where `sendToInvestigationAgent` is false or `isCybersecurity` is false are skipped. These are infrastructure noise, deployment events, and application errors that the classifier already determined are not security concerns.
+**Filter 2 — security relevance.** If `sendToInvestigationAgent` is false or `isCybersecurity` is false, the log is dropped with reason `not_security`. These are infrastructure noise, deployment events, and application errors.
 
-For logs that pass both filters, the analyst sends the log text and its classification to Gemini and asks for a threat investigation. The output includes:
+For logs that pass both filters, the analyst sends the log and its classification to the LLM and produces a threat investigation.
 
-- `aiSuggestion` — two to three sentences describing what is happening and why
-- `attackVector` — the specific technique being used
-- `complexity` — `simple` or `complex`, which determines how the responder handles it
-- `autoFixable` — whether a script can safely remediate this without human risk
-- `requiresHumanApproval` — whether a person needs to sign off before anything is executed
-- `priority` — integer from 1 to 5, where 1 is most urgent
-- `recurrenceRate` — probability from 0 to 100 that this happens again within 24 hours
-- `notifyTeams` — which teams should be informed
-- `proposedSteps` — a list of ordered remediation steps, each with a title, description, optional command, risk level, estimated time, and rollback instruction
+**What it produces per investigation:**
+
+| Field | Type | Description |
+|---|---|---|
+| `aiSuggestion` | string | 2–3 sentences: what is happening and why |
+| `attackVector` | string | The specific technique or threat pattern |
+| `complexity` | string | `simple` or `complex` — drives the responder's resolution mode |
+| `autoFixable` | bool | Whether a script can safely fix this |
+| `requiresHumanApproval` | bool | Whether a human must sign off |
+| `priority` | int | 1–5, where 5 is most urgent |
+| `recurrenceRate` | int | 0–100 probability of recurrence within 24 hours |
+| `confidence` | int | 0–100 model confidence in this investigation |
+| `notifyTeams` | string[] | Teams to alert |
+| `proposedSteps` | object[] | Ordered remediation steps (see below) |
+
+**Each proposed step:**
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | int | Step number |
+| `title` | string | Short action title |
+| `description` | string | What this step does and why |
+| `command` | string\|null | Exact shell/kubectl/aws-cli command, or null |
+| `risk` | string | `low`, `medium`, or `high` |
+| `estimatedTime` | string | e.g. `~30s`, `~5min` |
+| `rollback` | string\|null | How to undo this step |
+| `requiresApproval` | bool | Whether human approval is needed |
+| `autoExecute` | bool | True only if risk is `low` AND `requiresApproval` is false |
+
+**RAG query:** `log text + category + severity` — the three signals most useful for retrieving relevant threat intelligence or runbook sections.
 
 ---
 
 ### Responder
 
-**File:** `responder.py`
-**Reads from:** `logs.solver_plan`
-**Writes to:** `logs.solution`, `analytics`
+**File:** `responder.py`  
+**Reads from:** `logs.solver_plan`  
+**Writes to:** `logs.solution`, `analytics`  
+**Knowledge folder:** `responderKnowledge/`
 
-The responder takes the analyst's investigation and turns it into an executable resolution plan. It calls Gemini one more time with the full context — log, classification, and investigation findings — and produces a structured plan that the application layer can act on.
+Takes the analyst's investigation and produces a final, executable resolution plan. This is what gets written to PostgreSQL by the Ledger and displayed in the dashboard.
 
-The output includes:
+**What it produces per incident:**
 
-- `resolutionMode` — `autonomous` if the issue can be fixed without human intervention, `guided` if a person needs to be involved
-- `executiveSummary` — two to three sentences describing the incident and the resolution approach
-- `immediateActions` — a list of steps to take right now. Each step has an `approvalStatus` field that is either `auto` or `pending`. Steps marked `auto` are safe to execute without asking anyone. Steps marked `pending` need a human to approve them in the application before they run
-- `followUpActions` — tasks for the next 24 to 48 hours to prevent the issue from recurring, each with an owner team and deadline
-- `postIncidentSummary` — plain English explanation of what happened, what was or could have been impacted, the most likely root cause, and what should change going forward
+| Field | Type | Description |
+|---|---|---|
+| `resolutionMode` | string | `autonomous` if `autoFixable=true` and `complexity=simple`, otherwise `guided` |
+| `executiveSummary` | string | 2–3 sentences: the incident and resolution approach |
+| `immediateActions` | object[] | Steps to take right now (see below) |
+| `followUpActions` | object[] | Tasks for the next 24–48 hours |
+| `postIncidentSummary` | object | Plain English debrief |
 
-The responder does not ask for human input on the command line. All approval decisions happen in the application layer by reading the `approvalStatus` field on each step. When a human approves or denies a step in the application, that decision gets published to the `actions` Kafka topic, which the responder consumes to execute or skip accordingly.
+**Each immediate action:**
+
+| Field | Description |
+|---|---|
+| `id` | Step number |
+| `title` | Short action title |
+| `description` | What this does, why it is safe, what it prevents |
+| `command` | Exact ready-to-run command, or null |
+| `risk` | `low`, `medium`, or `high` |
+| `estimatedTime` | Time estimate |
+| `rollback` | Exact command to undo this, or null |
+| `autoExecute` | True only if risk is `low` AND `requiresApproval` is false |
+| `requiresApproval` | Whether a human must approve in the application |
+| `approvalStatus` | Set by the responder: `auto` or `pending` |
+
+**Each follow-up action:**
+
+| Field | Description |
+|---|---|
+| `title` | Task title |
+| `description` | What needs to be done to prevent recurrence |
+| `owner` | Which team owns this |
+| `deadline` | `immediate`, `24h`, `48h`, or `1 week` |
+
+**Post-incident summary:**
+
+| Field | Description |
+|---|---|
+| `whatHappened` | Plain English explanation of the attack or issue |
+| `impactAssessment` | What was or could have been impacted |
+| `rootCause` | Most likely root cause |
+| `lessonsLearned` | What should be changed or monitored going forward |
+
+**RAG query:** `log text + attackVector + category` — at this stage the responder has the investigation results, so it uses the attack vector as the primary retrieval signal to find the most relevant playbooks or remediation guides.
+
+**Approval flow:** the responder does not handle approvals on the command line. Each step is tagged `approvalStatus: pending` or `approvalStatus: auto` before the payload is published. The application (dashboard) reads these tags and presents pending steps to the operator. When the operator approves or denies, the decision is written to PostgreSQL via the gateway's `PATCH /remediation/{step_id}` endpoint.
+
+---
+
+## LLM router
+
+**File:** `llm_router.py`
+
+All three agents call the LLM through `invoke_with_rotation()` instead of calling the model directly. This function handles key rotation automatically.
+
+**Rotation order:** Gemini key 1 → Gemini key 2 → GPT-4.1
+
+On a 429 rate limit error, the router rotates to the next key silently. If all keys are exhausted in a single rotation, it waits `RATE_LIMIT_WAIT_SECONDS` (default 60) and then resets to the first key. Non-rate-limit errors are re-raised immediately without rotation.
+
+To check which provider is currently active, call `get_current_provider()` — all three agents print this on every LLM call.
+
+To add or remove keys, edit the `_build_clients()` function in `llm_router.py`. Commented-out entries for Gemini are already there — just uncomment them and set the corresponding env vars.
 
 ---
 
@@ -131,63 +212,140 @@ The responder does not ask for human input on the command line. All approval dec
 
 | Topic | Producer | Consumer | Content |
 |---|---|---|---|
-| `logs.unfiltered` | Your ingestor service | Classifier | Raw log documents as received from the source system |
-| `logs.categories` | Classifier | Analyst | Logs enriched with category, severity, tags, confidence, and security flags |
-| `logs.solver_plan` | Analyst | Responder | Security logs with full threat investigation and proposed remediation steps |
-| `logs.solution` | Responder | Ledger, Gateway | Complete resolution plans with per-step approval status |
-| `analytics` | All three agents | Ledger, Gateway | Heartbeats, per-event statistics, and cumulative counters |
+| `logs.unfiltered` | Ingestor | Classifier | Raw log strings as received from the source system |
+| `logs.categories` | Classifier | Analyst | Log + classification JSON |
+| `logs.solver_plan` | Analyst | Responder | Log + classification + investigation JSON |
+| `logs.solution` | Responder | Ledger | Full resolution plan JSON |
+| `analytics` | All three agents | Ledger | Heartbeats, per-event stats, and cumulative counters |
 
-All topics are created automatically by the agents using `ensure_topic()` if they do not already exist. You do not need to create them manually.
+All topics are auto-created by the agents via `ensure_topic()` if they do not already exist. You do not need to create them manually in Kafka.
+
+---
+
+## Kafka client
+
+**File:** `kafka_client.py`
+
+A thin wrapper around `kafka-python-ng` with three classes:
+
+**`AuroraProducer`** — wraps `KafkaProducer`. Key methods:
+- `send_log(topic, payload, key=None)` — serialises payload to JSON and sends it. Uses `trace.id` or `id` as the partition key by default
+- `flush()` — blocks until all buffered messages are delivered
+- `ensure_topic(name)` — creates the topic if it does not exist
+
+**`AuroraConsumer`** — wraps `KafkaConsumer`. Implements `__iter__` so you can use it directly in a `for message in consumer` loop. Messages are automatically deserialised from JSON.
+
+**`AuroraKafkaClient`** — base class for both. The `_wait_for_connection` method retries the connection every 2 seconds indefinitely until Kafka is reachable. This means agents will keep retrying on startup if Kafka is not ready yet — no manual intervention needed.
 
 ---
 
 ## Analytics
 
-Every agent publishes to the `analytics` topic. Each message has an `agent` field so consumers can filter by source, and an `event` field so consumers know what kind of message it is.
+Every agent publishes structured events to the `analytics` Kafka topic. All events have `agent`, `event`, and `timestamp` fields. Counters are cumulative for the lifetime of the process and reset on restart.
 
-**Classifier** publishes:
+### Classifier events
 
-- `heartbeat` — alive signal with uptime, received count, classified count, forwarded to analyst count, and average processing time in milliseconds
-- `classification_produced` — fires after every classification with the result details and cumulative breakdowns by category and severity
+**`heartbeat`** — published every `CLASSIFIER_HEARTBEAT_INTERVAL` seconds:
+```json
+{
+  "agent": "classifier",
+  "event": "heartbeat",
+  "status": "alive",
+  "active_llm": "GPT-4.1",
+  "quick_stats": {
+    "received": 142,
+    "classified": 141,
+    "sent_to_analyst": 38,
+    "avg_processing_ms": 1240
+  }
+}
+```
 
-**Analyst** publishes:
+**`classification_produced`** — published after every successful classification. Includes the individual result (category, severity, tags, confidence, is_cybersecurity, sent_to_analyst) and cumulative breakdowns by category and severity.
 
-- `heartbeat` — alive signal with uptime, received count, investigated count, skipped count, and average processing time
-- `investigation_produced` — fires after every successful investigation with attack vector, complexity, priority, recurrence rate, steps breakdown by risk level, and cumulative stats
-- `log_skipped` — fires when a log is dropped, with the reason (`low_confidence` or `not_security`) and the log's severity and category
+### Analyst events
 
-**Responder** publishes:
+**`heartbeat`** — published every `ANALYST_HEARTBEAT_INTERVAL` seconds with received, investigated, skipped counts and average processing time.
 
-- `heartbeat` — alive signal with uptime and quick stats
-- `resolution_produced` — fires after every resolution plan is generated with the resolution mode, steps breakdown, and cumulative autonomous vs guided rates
-- `human_decision` — fires when a human approves or denies a step in the application, with the step ID, outcome, optional reason, and running totals
+**`investigation_produced`** — published after every investigation. Includes attack vector, complexity, priority, recurrence rate, steps breakdown by risk level, and all cumulative stats.
 
-The heartbeat interval for each agent is configurable independently. The counters in every event are cumulative for the lifetime of the process, meaning they reset when the agent restarts. For permanent storage of these metrics, point the ledger service at the `analytics` topic.
+**`log_skipped`** — published when a log is dropped, with the reason (`low_confidence` or `not_security`), the log's severity and category, and running skip totals.
+
+### Responder events
+
+**`heartbeat`** — published every `RESPONDER_HEARTBEAT_INTERVAL` seconds.
+
+**`resolution_produced`** — published after every resolution plan. Includes resolution mode, steps breakdown (total, auto-execute, requires-approval, follow-up, risk breakdown), and cumulative autonomous vs guided rates.
+
+**`human_decision`** — published when a human approves or denies a remediation step in the application:
+```json
+{
+  "agent": "responder",
+  "event": "human_decision",
+  "decision": {
+    "step_id": 3,
+    "outcome": "approved",
+    "reason": null
+  },
+  "cumulative_decisions": {
+    "approved": 12,
+    "denied": 3
+  }
+}
+```
 
 ---
 
-## Knowledge base
+## Knowledge bases (RAG)
 
-The `knowledge/` folder lets you inject domain-specific context into the classifier's prompt without touching any code. Any file you place in this folder is loaded once when the classifier starts and appended to the system prompt for every classification call.
+Each agent has its own knowledge folder. Drop files into the appropriate folder and the agent will load, chunk, embed, and cache them automatically on startup. Relevant chunks are retrieved per event and injected into the LLM prompt.
 
-Supported file types:
+| Agent | Folder | Best content to put here |
+|---|---|---|
+| Classifier | `classifierKnowledge/` | Internal log format docs, field definitions, service catalogue, custom categorisation rules, GDPR/HIPAA tagging requirements |
+| Analyst | `analystKnowledge/` | Threat intelligence reports, CVE databases, MITRE ATT&CK descriptions, known attack patterns in your environment, past incident notes |
+| Responder | `responderKnowledge/` | Remediation playbooks, runbooks, approved command templates, rollback procedures, escalation policies, team ownership docs |
 
-- `.pdf` — extracted using PyMuPDF
-- `.docx` — extracted using python-docx
-- `.txt` — read as plain text
-- `.md` — read as plain text
+**Supported file formats:** `.pdf`, `.docx`, `.txt`, `.md`
 
-Examples of what to put here:
+**How it works:**
 
-- A PDF explaining your company's internal log format and what each field means
-- GDPR or HIPAA compliance requirements that affect how logs should be categorised
-- OWASP Top 10 reference material
-- A guide describing which log patterns your team considers critical vs high severity
-- A list of internal service names and what they do so the classifier can make better decisions
+1. On startup the agent reads all files in the knowledge folder, splits them into overlapping text chunks, and calls the OpenAI embeddings API (`text-embedding-3-small`) to embed each chunk.
+2. The result is written to a `.cache/` subfolder inside the knowledge folder as `embeddings.json` and `manifest.json`.
+3. On subsequent startups, the manifest is compared against the current files. If nothing has changed, the cache is loaded directly — no embedding API calls are made.
+4. If any file has been added, removed, or modified, the entire cache is rebuilt.
+5. At inference time, the agent builds a retrieval query from the current log/event, embeds it, and computes cosine similarity against all cached chunk embeddings. The top-K most relevant chunks are assembled into a context string and injected into the prompt.
 
-To add new knowledge, drop the file in the `knowledge/` folder and restart the classifier. Nothing else is required.
+**Configuration per agent:**
 
-If you have very large documents (100 or more pages), be aware that the full text is injected into every single API call. This increases cost and latency. For the current setup this is acceptable. If it becomes a problem, the next step is proper RAG with a vector database like Chroma where only relevant chunks are retrieved per log instead of the entire knowledge base.
+```properties
+# Classifier
+KNOWLEDGE_DIR=classifierKnowledge
+KNOWLEDGE_CHUNK_SIZE=500
+KNOWLEDGE_CHUNK_OVERLAP=50
+KNOWLEDGE_TOP_K=5
+
+# Analyst
+ANALYST_KNOWLEDGE_DIR=analystKnowledge
+ANALYST_KNOWLEDGE_CHUNK_SIZE=500
+ANALYST_KNOWLEDGE_CHUNK_OVERLAP=50
+ANALYST_KNOWLEDGE_TOP_K=5
+
+# Responder
+RESPONDER_KNOWLEDGE_DIR=responderKnowledge
+RESPONDER_KNOWLEDGE_CHUNK_SIZE=500
+RESPONDER_KNOWLEDGE_CHUNK_OVERLAP=50
+RESPONDER_KNOWLEDGE_TOP_K=5
+```
+
+**To add new knowledge:** copy the file into the relevant folder and restart the agent. You will see confirmation lines like:
+```
+[AnalystKnowledge] Read: mitre-attack.pdf (87 chunks)
+[AnalystKnowledge] Embedding 87 chunks with text-embedding-3-small...
+[AnalystKnowledge] Ready — 87 chunks indexed
+```
+
+**If the folder does not exist:** the agent logs a warning and continues without RAG — it does not crash.
 
 ---
 
@@ -195,164 +353,206 @@ If you have very large documents (100 or more pages), be aware that the full tex
 
 ```
 rac-agents/
-├── knowledge/              Drop PDFs, DOCX, or TXT files here for classifier context
-├── classifier.py           Agent 1 — classifies raw logs
-├── analyst.py              Agent 2 — investigates security events
-├── responder.py            Agent 3 — generates remediation plans
-├── kafka_client.py         Shared Kafka producer and consumer wrappers
-├── knowledge_loader.py     Reads and extracts text from files in knowledge/
-├── pipeline.json           Shared state file used in manual mode
-├── .env                    Environment variables (not committed)
-└── .gitignore
+  classifier.py                  — Agent 1: classifies raw logs
+  analyst.py                     — Agent 2: investigates security events
+  responder.py                   — Agent 3: generates remediation plans
+  llm_router.py                  — LLM key rotation (Gemini → GPT-4.1)
+  kafka_client.py                — Shared Kafka producer/consumer wrappers
+  classifierKnowledge_loader.py  — RAG loader for the classifier
+  analystKnowledge_loader.py     — RAG loader for the analyst
+  responderKnowledge_loader.py   — RAG loader for the responder
+  pipeline.json                  — Shared state file for manual mode
+  requirements.txt               — All Python dependencies
+  .env                           — Environment variables (never committed)
+  .gitignore
+  classifierKnowledge/           — Drop files here for classifier RAG
+  analystKnowledge/              — Drop files here for analyst RAG
+  responderKnowledge/            — Drop files here for responder RAG
 ```
 
 ---
 
 ## Setup
 
-**Requirements:**
+**Prerequisites:**
+- Python 3.10+
+- Apache Kafka running (via Docker Compose in the [.github repo](https://github.com/Admin-or-Admin/.github))
+- At least one API key — OpenAI and/or Gemini
 
-- Python 3.10 or higher. Python 3.9 works but Google's libraries will print deprecation warnings.
-- A running Kafka broker accessible from your machine
-- A Gemini API key from Google AI Studio
-
-**Clone and create the virtual environment:**
-
+**1. Clone and create a virtual environment**
 ```bash
+git clone https://github.com/Admin-or-Admin/rac-agents.git
 cd rac-agents
 python -m venv venv
-source venv/bin/activate      # Mac / Linux
-venv\Scripts\activate         # Windows
+source venv/bin/activate        # Mac/Linux
+venv\Scripts\activate           # Windows
 ```
 
-**Install dependencies:**
-
+**2. Install dependencies**
 ```bash
-pip install langchain langchain-google-genai kafka-python python-dotenv pymupdf python-docx
+pip install -r requirements.txt
 ```
 
-**Create the `.env` file:**
-
+**3. Create your `.env` file**
 ```bash
-cp .env.example .env
+cp .env .env.backup   # keep the example for reference
 ```
 
-Then fill in your values. See the [Configuration](#configuration) section for all available variables.
+Edit `.env` with your actual keys and Kafka address. See the [Environment variables](#environment-variables) section for all options.
 
-**Create the knowledge folder:**
-
+**4. Create knowledge folders**
 ```bash
-mkdir knowledge
+mkdir -p classifierKnowledge analystKnowledge responderKnowledge
 ```
 
-**Create the pipeline file:**
+These can be empty to start — the agents will skip RAG if no files are present.
 
+**5. Verify Kafka is reachable**
 ```bash
-echo "{}" > pipeline.json
+curl http://localhost:8080   # Redpanda console should respond
 ```
 
 ---
 
-## Configuration
+## Environment variables
 
-All configuration lives in `.env`. None of these values are committed to the repository.
+All configuration lives in `.env`.
+
+### LLM keys
+
+| Variable | Description |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI key — used for GPT-4.1 (LLM) and `text-embedding-3-small` (RAG embeddings) |
+| `GEMINI_API_KEY_1` | First Gemini key — used if uncommented in `llm_router.py` |
+| `GEMINI_API_KEY_2` | Second Gemini key — used as fallback after key 1 |
+
+### Kafka
 
 | Variable | Default | Description |
 |---|---|---|
-| `GEMINI_API_KEY` | required | Your Google Gemini API key from Google AI Studio |
-| `KAFKA_BROKERS` | `localhost:29092` | Address of your Kafka broker. If Kafka runs on another machine use that machine's LAN IP, not localhost. Only define this once — if you have two entries the last one wins and the first is silently ignored |
-| `KAFKA_GROUP_ID` | `classifier-group` | The Kafka consumer group ID for the classifier. Changing this makes Kafka treat the classifier as a brand new consumer, which causes it to reprocess all messages from the beginning of the topic |
-| `BATCH_SIZE` | `20` | How many messages the classifier pulls from Kafka in a single poll before processing. This does not mean they are sent to Gemini in a batch — each message is still classified individually. Higher values reduce poll overhead but increase memory usage per cycle |
-| `CLASSIFIER_MODE` | `manual` | Set to `kafka` to consume from Kafka automatically. Leave as `manual` to read from stdin for testing |
-| `ANALYST_MODE` | `manual` | Set to `kafka` to consume from Kafka automatically |
-| `RESPONDER_MODE` | `manual` | Set to `kafka` to consume from Kafka automatically |
-| `MIN_CLASSIFICATION_CONFIDENCE` | `70` | Percentage from 0 to 100. Logs where the classifier confidence is below this value are skipped by the analyst. Set to `0` to disable the filter completely and pass all logs through regardless of confidence |
-| `CLASSIFIER_HEARTBEAT_INTERVAL` | `30` | How often in seconds the classifier publishes a heartbeat to the analytics topic |
-| `ANALYST_HEARTBEAT_INTERVAL` | `30` | How often in seconds the analyst publishes a heartbeat |
-| `RESPONDER_HEARTBEAT_INTERVAL` | `30` | How often in seconds the responder publishes a heartbeat |
-| `KNOWLEDGE_DIR` | `knowledge` | Path to the folder containing knowledge files for the classifier. Can be absolute or relative to where you run the script |
+| `KAFKA_BROKERS` | `localhost:29092` | Kafka broker address. If Kafka runs in Docker on the same machine, use `localhost:29092`. If it runs on another machine, use that machine's LAN IP |
+| `KAFKA_GROUP_ID` | `classifier-group` | Consumer group for the classifier. Changing this causes Kafka to treat the classifier as a new consumer and reprocess all messages from the beginning |
+| `BATCH_SIZE` | `20` | Messages pulled per Kafka poll. Each is still classified individually |
 
-A complete `.env` for reference:
+### Agent modes
 
-```properties
-# Gemini
-GEMINI_API_KEY=your_key_here
+| Variable | Default | Options |
+|---|---|---|
+| `CLASSIFIER_MODE` | `manual` | `manual` (stdin) or `kafka` (continuous) |
+| `ANALYST_MODE` | `manual` | `manual` (reads `pipeline.json`) or `kafka` |
+| `RESPONDER_MODE` | `manual` | `manual` (reads `pipeline.json`) or `kafka` |
 
-# Kafka — use the LAN IP of the machine running Docker, not localhost
-KAFKA_BROKERS=192.168.1.6:29092
-KAFKA_GROUP_ID=classifier-group
-BATCH_SIZE=20
+### Filtering
 
-# Agent modes — manual for testing, kafka for production
-CLASSIFIER_MODE=kafka
-ANALYST_MODE=kafka
-RESPONDER_MODE=kafka
+| Variable | Default | Description |
+|---|---|---|
+| `MIN_CLASSIFICATION_CONFIDENCE` | `70` | Analyst skips logs below this confidence %. Set to `0` to disable |
 
-# Confidence filter — set to 0 to disable and pass all logs through
-MIN_CLASSIFICATION_CONFIDENCE=0
+### Heartbeats
 
-# Heartbeat intervals in seconds
-CLASSIFIER_HEARTBEAT_INTERVAL=30
-ANALYST_HEARTBEAT_INTERVAL=30
-RESPONDER_HEARTBEAT_INTERVAL=30
-```
+| Variable | Default | Description |
+|---|---|---|
+| `CLASSIFIER_HEARTBEAT_INTERVAL` | `30` | Seconds between classifier heartbeats |
+| `ANALYST_HEARTBEAT_INTERVAL` | `30` | Seconds between analyst heartbeats |
+| `RESPONDER_HEARTBEAT_INTERVAL` | `30` | Seconds between responder heartbeats |
+| `RATE_LIMIT_WAIT_SECONDS` | `60` | Seconds to wait when all LLM keys are rate limited |
+
+### Knowledge base (RAG)
+
+| Variable | Default | Description |
+|---|---|---|
+| `KNOWLEDGE_DIR` | `classifierKnowledge` | Knowledge folder for the classifier |
+| `KNOWLEDGE_CHUNK_SIZE` | `500` | Words per chunk |
+| `KNOWLEDGE_CHUNK_OVERLAP` | `50` | Overlap in words between adjacent chunks |
+| `KNOWLEDGE_TOP_K` | `5` | Number of chunks to retrieve per classification |
+| `ANALYST_KNOWLEDGE_DIR` | `analystKnowledge` | Knowledge folder for the analyst |
+| `ANALYST_KNOWLEDGE_CHUNK_SIZE` | `500` | |
+| `ANALYST_KNOWLEDGE_CHUNK_OVERLAP` | `50` | |
+| `ANALYST_KNOWLEDGE_TOP_K` | `5` | |
+| `RESPONDER_KNOWLEDGE_DIR` | `responderKnowledge` | Knowledge folder for the responder |
+| `RESPONDER_KNOWLEDGE_CHUNK_SIZE` | `500` | |
+| `RESPONDER_KNOWLEDGE_CHUNK_OVERLAP` | `50` | |
+| `RESPONDER_KNOWLEDGE_TOP_K` | `5` | |
 
 ---
 
 ## Running the agents
 
-Open three separate terminal windows. Activate the virtual environment in each one.
+Open three terminal windows. Activate the venv in each one (`source venv/bin/activate`). Start them in order — each depends on the previous one publishing messages before it has anything to consume.
 
-```bash
-source venv/bin/activate
-```
-
-Start the agents in this order. Each one depends on the previous publishing messages before it has anything to consume.
-
-**Terminal 1 — Classifier:**
-
+**Terminal 1 — Classifier**
 ```bash
 python classifier.py
 ```
 
-**Terminal 2 — Analyst:**
-
+**Terminal 2 — Analyst**
 ```bash
 python analyst.py
 ```
 
-**Terminal 3 — Responder:**
-
+**Terminal 3 — Responder**
 ```bash
 python responder.py
 ```
 
-Once all three are running, any message published to `logs.unfiltered` will flow through the full pipeline automatically.
+Once all three are running, any message published to `logs.unfiltered` will flow through the full pipeline automatically. You will see output in each terminal as messages arrive and are processed.
 
-To test manually without Kafka, set all three `_MODE` variables to `manual` in `.env`. Then run them one at a time in any single terminal. The classifier will prompt you to paste a log message, write the result to `pipeline.json`, and exit. Run the analyst next to read from `pipeline.json`, investigate, and write the result back. Run the responder last to read the investigation and produce the final plan.
+**Expected startup output (classifier as example):**
+```
+[KAFKA MODE] Connecting to ['localhost:29092']...
+  [AnalystKnowledge] Cache valid — loading from analystKnowledge/.cache/embeddings.json
+  [AnalystKnowledge] Loaded 142 chunks from cache
+Connected - listening on logs.unfiltered...
+  [Analytics] Heartbeat published (active LLM: GPT-4.1)
+```
 
 ---
 
-## Pipeline JSON fallback
+## Manual mode
 
-`pipeline.json` is a flat JSON file that acts as shared state between agents when running in manual mode. Each agent reads from it and writes back to it as it completes its stage. In Kafka mode this file is still written on every message as a local record of the last processed item, but it is not the primary communication channel.
+Set all three `_MODE` variables to `manual` in `.env`, then run each agent one at a time in a single terminal.
 
-Do not commit `pipeline.json` to the repository. It is already listed in `.gitignore`.
+**Step 1 — Classifier (interactive)**
+```bash
+python classifier.py
+```
+```
+LOG > 2024-01-15 14:23:01 Failed login attempt for user admin from 192.168.1.105
+```
+The classifier analyses the log, prints the classification, writes it to `pipeline.json`, and waits for the next input. Type `exit` to quit.
+
+**Step 2 — Analyst (reads pipeline.json)**
+```bash
+python analyst.py
+```
+Reads the classification from `pipeline.json`, investigates if it passes the filters, and writes the investigation back to `pipeline.json`.
+
+**Step 3 — Responder (reads pipeline.json)**
+```bash
+python responder.py
+```
+Reads the investigation from `pipeline.json` and prints the full resolution plan.
+
+This is the fastest way to test a specific log end-to-end without needing Kafka running.
 
 ---
 
-## Adding a new knowledge file
+## pipeline.json
 
-1. Obtain the file in PDF, DOCX, TXT, or MD format.
-2. Copy it into the `knowledge/` folder.
-3. Restart the classifier.
+`pipeline.json` is the shared state file used in manual mode. In Kafka mode it is still written on every message as a local record of the last processed event, but it is not the primary communication channel.
 
-The file will be loaded on startup and you will see a confirmation line in the output:
+It accumulates data through the pipeline stages — after the classifier it contains `log` and `classification`. After the analyst it also has `investigation`. After the responder it has all four fields plus `resolution` and `resolved_at`.
 
-```
-[Knowledge] Loaded: gdpr-requirements.pdf (42381 chars)
-```
+It is listed in `.gitignore` and should never be committed. The file in the repository is a sample showing what a complete pipeline run looks like.
 
-If the file fails to load you will see an error message with the reason. The classifier will continue to run without that file rather than crashing.
+---
 
-To remove a knowledge file, delete it from the folder and restart the classifier.
+## Related repos
+
+| Repo | Description |
+|---|---|
+| [gateway](https://github.com/Admin-or-Admin/gateway) | FastAPI API that reads the processed data from PostgreSQL |
+| [ledger](https://github.com/Admin-or-Admin/ledger) | Kafka consumer that writes agent output to PostgreSQL |
+| [ingestor](https://github.com/Admin-or-Admin/ingestor) | Pushes logs to `logs.unfiltered` (mock, Elasticsearch, GNS3) |
+| [dashboard](https://github.com/Admin-or-Admin/dashboard) | React frontend |
+| [.github](https://github.com/Admin-or-Admin/.github) | Docker Compose for local development |

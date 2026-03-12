@@ -1,8 +1,20 @@
-python-dotenv
-kafka-python
+# ── LLM & LangChain ───────────────────────────────────────────────────────────
 langchain
-langchain-google-genai
+langchain-core
 langchain-openai
+langchain-google-genai
 openai
-pymupdf
-python-docx
+
+# ── Kafka ─────────────────────────────────────────────────────────────────────
+kafka-python-ng
+
+# ── RAG / embeddings ──────────────────────────────────────────────────────────
+# Used by all three knowledge loaders (classifier, analyst, responder)
+# openai is already listed above and covers the embeddings API
+
+# ── Document readers (for knowledge base files) ───────────────────────────────
+pymupdf          # PDF support  — import fitz
+python-docx      # .docx support
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv
