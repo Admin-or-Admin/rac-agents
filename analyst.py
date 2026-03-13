@@ -3,10 +3,14 @@ import json
 import time
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from kafka_client import AuroraProducer, AuroraConsumer
 from llm_router import invoke_with_rotation, get_current_provider
 from analystKnowledge_loader import load_knowledge_store
+
+from shared.logger import setup_logger
+
+logger = setup_logger("analyst")
 
 load_dotenv()
 

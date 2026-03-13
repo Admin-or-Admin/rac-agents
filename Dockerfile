@@ -1,17 +1,47 @@
-# Use an official Python runtime as a parent image
-FROM python:3.11-slim
+# --- Build Stage ---
+FROM python:3.11-slim AS builder
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Copy the requirements file into the container at /app
-COPY requirements.txt .
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install any needed packages specified in requirements.txt
+# Create virtualenv
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Copy shared library
+COPY shared/ ./shared/
+RUN pip install --no-cache-dir --no-build-isolation ./shared/
+
+# Copy service requirements
+COPY rac-agents/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the current directory contents into the container at /app
-COPY . .
+# --- Runtime Stage ---
+FROM python:3.11-slim
 
-# Run classifier.py when the container launches (can be overridden in compose)
-CMD ["python", "classifier.py"]
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy virtualenv from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH="/app"
+
+# Copy application code
+COPY shared/ ./shared/
+COPY rac-agents/ ./rac-agents/
+
+# Default command (overridden in compose)
+CMD ["python", "rac-agents/classifier.py"]
