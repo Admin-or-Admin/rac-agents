@@ -404,7 +404,7 @@ def manual_mode():
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    mode = os.getenv("RESPONDER_MODE", "manual").lower()
+    mode = os.getenv("RESPONDER_MODE", "kafka").lower()
 
     if mode == "kafka":
         start_kafka_consumer()

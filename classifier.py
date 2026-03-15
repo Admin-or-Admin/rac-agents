@@ -302,7 +302,7 @@ def manual_mode():
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    mode = os.getenv("CLASSIFIER_MODE", "manual").lower()
+    mode = os.getenv("CLASSIFIER_MODE", "kafka").lower()
 
     if mode == "kafka":
         start_kafka_consumer()

@@ -130,7 +130,7 @@ class KnowledgeStore:
         self.loaded = False
 
     def load(self):
-        if not os.path.isdir(KNOWLEDGE_DIR):
+        if not os.path.exists(KNOWLEDGE_DIR) or not os.path.isdir(KNOWLEDGE_DIR):
             print(f"  [AnalystKnowledge] Folder '{KNOWLEDGE_DIR}' not found — skipping RAG")
             self.loaded = True
             return

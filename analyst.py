@@ -386,7 +386,7 @@ def manual_mode():
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
-    mode = os.getenv("ANALYST_MODE", "manual").lower()
+    mode = os.getenv("ANALYST_MODE", "kafka").lower()
 
     if mode == "kafka":
         start_kafka_consumer()
