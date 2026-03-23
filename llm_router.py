@@ -2,9 +2,10 @@ import os
 import time
 import json
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 from langchain_core.output_parsers import StrOutputParser
+
+from shared.gemini_cli_llm import GeminiCLILLM
 
 load_dotenv()
 
@@ -30,33 +31,17 @@ def _is_rate_limit(error: Exception) -> bool:
 def _build_clients() -> list:
     """
     Build the ordered list of (label, llm) pairs from environment variables.
-    Only includes clients where the key is actually set.
+    If Gemini CLI is preferred, it adds it first.
     """
     clients = []
 
-    # key1 = os.getenv("GEMINI_API_KEY_1")
-    # key2 = os.getenv("GEMINI_API_KEY_2")
+    # Use Gemini CLI via npx as the primary LLM
+    clients.append((
+        "Gemini CLI",
+        GeminiCLILLM(temperature=0.1)
+    ))
+
     openai_key = os.getenv("OPENAI_API_KEY")
-
-    # if key1:
-    #     clients.append((
-    #         "Gemini key 1",
-    #         ChatGoogleGenerativeAI(
-    #             model="gemini-2.5-flash",
-    #             google_api_key=key1,
-    #             temperature=0.1,
-    #         )
-    #     ))
-
-    # if key2:
-    #     clients.append((
-    #         "Gemini key 2",
-    #         ChatGoogleGenerativeAI(
-    #             model="gemini-2.5-flash",
-    #             google_api_key=key2,
-    #             temperature=0.1,
-    #         )
-    #     ))
 
     if openai_key:
         clients.append((
@@ -67,12 +52,6 @@ def _build_clients() -> list:
                 temperature=0.1,
             )
         ))
-
-    if not clients:
-        raise RuntimeError(
-            "No LLM keys configured. Set at least one of: "
-            "GEMINI_API_KEY_1, GEMINI_API_KEY_2, OPENAI_API_KEY"
-        )
 
     return clients
 

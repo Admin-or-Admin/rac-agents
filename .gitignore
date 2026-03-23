@@ -36,28 +36,6 @@ htmlcov/
 coverage.xml
 *.cover
 
-# ── Node.js ───────────────────────────────────────────────────────────────────
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-.npm
-.yarn/
-.pnp.*
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
-
-# ── TypeScript / Vite / React build ───────────────────────────────────────────
-dist/
-dist-ssr/
-build/
-out/
-.vite/
-*.tsbuildinfo
-tsconfig.tsbuildinfo
-
 # ── Logs ──────────────────────────────────────────────────────────────────────
 logs/
 *.log
@@ -67,14 +45,6 @@ log/
 # ── Docker ────────────────────────────────────────────────────────────────────
 .dockerignore
 docker-compose.override.yml
-
-# ── Database ──────────────────────────────────────────────────────────────────
-*.sql
-*.sqlite
-*.sqlite3
-*.db
-postgres-data/
-pgdata/
 
 # ── IDE and editors ───────────────────────────────────────────────────────────
 .vscode/
@@ -103,11 +73,6 @@ test-results/
 playwright-report/
 *.snap
 
-# ── Kafka / Zookeeper local data ──────────────────────────────────────────────
-kafka-data/
-zookeeper-data/
-kafka-logs/
-
 # ── Secrets and keys ──────────────────────────────────────────────────────────
 *.pem
 *.key
@@ -118,5 +83,10 @@ kafka-logs/
 secrets/
 
 
-classifierKnowledge/.cache/
+classifierKnowledge/
 pipeline.json
+bin/
+lib/
+lib64/
+lib64
+pyvenv.cfg
